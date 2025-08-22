@@ -1,0 +1,15 @@
+#!/bin/bash
+#BSUB -q long
+#BSUB -n 8
+#BSUB -W 01:00
+#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -o logs/fqcp_post_%J.out
+#BSUB -e logs/fqcp_post_%J.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+mkdir -p fastqc_post tmp/java
+export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx4g"
+
+fastqc -t 8 -o fastqc_post trim/*.fastq.gz

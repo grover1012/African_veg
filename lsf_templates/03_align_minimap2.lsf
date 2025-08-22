@@ -1,0 +1,30 @@
+#!/bin/bash
+#BSUB -q long
+#BSUB -n 8
+#BSUB -W 08:00
+#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -o logs/aln_mm2_%J_%I.out
+#BSUB -e logs/aln_mm2_%J_%I.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+
+mkdir -p align tmp/java
+export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx8g"
+
+REF_FASTA="${REF_FASTA:-$PWD/${PWD##*/}.fa}"
+[[ -f "$REF_FASTA" ]] || { echo "Missing REF_FASTA: $REF_FASTA" >&2; exit 2; }
+
+SHEET="fastq_merged/samples.tsv"
+line=$(sed -n "${LSB_JOBINDEX}p" "$SHEET")
+sample=$(echo "$line" | awk '{print $1}')
+r1="trim/${sample}_R1.fastq.gz"
+r2="trim/${sample}_R2.fastq.gz"
+[[ -f "$r1" && -f "$r2" ]] || { echo "Missing trimmed FASTQs for $sample"; exit 3; }
+
+minimap2 -ax sr -t 8 "$REF_FASTA" "$r1" "$r2"   | samtools sort -@ 4 -o "align/${sample}.sorted.bam" -
+
+gatk --java-options "-Xmx8g" MarkDuplicatesSpark   -I "align/${sample}.sorted.bam" -O "align/${sample}.md.bam" -M "align/${sample}.md.metrics.txt"
+samtools index "align/${sample}.md.bam"
+samtools flagstat "align/${sample}.md.bam" > "align/${sample}.flagstat.txt"

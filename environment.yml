@@ -1,0 +1,18 @@
+name: aiv_env_new
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - python=3.10
+  - fastqc
+  - multiqc
+  - fastp
+  - bwa-mem2
+  - samtools
+  - bcftools
+  - gatk4
+  - picard
+  - iqtree
+  - vcftools
+  - bedtools
+  - seqtk
+  - openjdk=11
+  - r-base
