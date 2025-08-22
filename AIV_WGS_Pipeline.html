@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIV Project — Species-wise WGS Pipeline (Hazel LSF)</title>
+<style>
+body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; line-height: 1.5; }
+header { background: #0f172a; color: #fff; padding: 24px; }
+main { max-width: 1000px; margin: 0 auto; padding: 24px; }
+pre { background: #0b1020; color: #e6edf3; padding: 12px; border-radius: 8px; overflow: auto; position: relative; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 0.92rem; }
+h1, h2, h3 { color: #0f172a; }
+.toc { background: #f8fafc; padding: 12px 16px; border: 1px solid #e5e7eb; border-radius: 8px; }
+.copy-btn { position: absolute; top: 8px; right: 8px; font-size: 12px; padding: 6px 8px; border: 1px solid #94a3b8; border-radius: 6px; background: #e2e8f0; cursor: pointer; }
+small { color: #475569; }
+hr { border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }
+footer { color: #475569; font-size: 0.9rem; margin-top: 32px; border-top: 1px solid #e5e7eb; padding-top: 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AIV Project — Species-wise WGS Pipeline (Hazel LSF)</h1>
+  <small>Last updated: 2025-08-22</small>
+</header>
+<main>
+  <div class="toc">
+    <strong>Contents</strong>
+    <ol>
+      <li><a href="#quick-start">Quick Start</a></li>
+      <li><a href="#lsf-templates">LSF Templates</a></li>
+      <li><a href="#hazel-notes">Hazel-specific Notes</a></li>
+      <li><a href="#troubleshooting">Troubleshooting</a></li>
+    </ol>
+  </div>
+  <h2 id='quick-start'>Quick Start (per species)</h2><pre><code>export PROJ_ROOT=/share/africanveg/gwnjeri/AIV_project
+export SPECIES=&lt;Species_Name&gt;
+cd "$PROJ_ROOT/$SPECIES"
+# 1) Index reference
+REF_FASTA="$PWD/${SPECIES}.fa" bsub &lt; "$PROJ_ROOT/00_prep_ref.lsf"
+# 2) Trim
+N=$(wc -l &lt; fastq_merged/samples.tsv)
+bsub -q long -n 8 -W 02:00 -R 'span[hosts=1] rusage[mem=3]' -J "fastp[1-$N]%24" &lt; 02_fastp.lsf
+# 3) Post-trim QC
+bsub -q long -n 8 -W 01:00 -R 'span[hosts=1] rusage[mem=3]' &lt; 01b_fastqc_post.lsf
+# 4) Align
+bsub -q long -n 8 -W 08:00 -R 'span[hosts=1] rusage[mem=3]' -J "aln[1-$N]%24" &lt; 03_align_markdup.lsf
+# 5) gVCFs
+bsub -q long -n 8 -W 08:00 -R 'span[hosts=1] rusage[mem=3]' -J "hc[1-$N]%24" &lt; 04_hc_gvcf.lsf
+# 6) Joint
+bsub -q long -n 8 -W 08:00 -R 'span[hosts=1] rusage[mem=3]' &lt; 05_joint_geno.lsf
+# 7) Filter
+bsub -q long -n 8 -W 02:00 -R 'span[hosts=1] rusage[mem=3]' &lt; 06_filter_vcfs.lsf
+# 8) MultiQC
+multiqc -o fastqc_post fastqc_pre fastqc_post trim/reports
+</code></pre><h2 id='lsf-templates'>LSF Templates</h2><h3>00_prep_ref.lsf</h3><pre><code>#!/bin/bash
+#BSUB -q long
+#BSUB -n 4
+#BSUB -W 01:00
+#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -o logs/refidx_%J.out
+#BSUB -e logs/refidx_%J.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+mkdir -p tmp/java
+export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx4g"
+
+: "${REF_FASTA:?set REF_FASTA to absolute path of your .fa}"
+bwa-mem2 index "$REF_FASTA"
+samtools faidx "$REF_FASTA"
+picard CreateSequenceDictionary R="$REF_FASTA" O="${REF_FASTA%.fa}.dict"</code></pre><h3>01_fastqc_pre.lsf</h3><pre><code>#!/bin/bash
+#BSUB -q long
+#BSUB -n 8
+#BSUB -W 01:00
+#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -o logs/fqcp_%J.out
+#BSUB -e logs/fqcp_%J.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+mkdir -p fastqc_pre
+fastqc -t 8 -o fastqc_pre fastq_merged/*.fastq.gz
+multiqc -o fastqc_pre fastqc_pre</code></pre><h3>01b_fastqc_post.lsf</h3><pre><code>#!/bin/bash
+#BSUB -q long
+#BSUB -n 8
+#BSUB -W 01:00
+#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -o logs/fqcp_post_%J.out
+#BSUB -e logs/fqcp_post_%J.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+mkdir -p fastqc_post tmp/java
+export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx4g"
+
+fastqc -t 8 -o fastqc_post trim/*.fastq.gz</code></pre><h3>02_fastp.lsf</h3><pre><code>#!/bin/bash
+#BSUB -q long
+#BSUB -n 8
+#BSUB -W 02:00
+#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -o logs/fastp_%J_%I.out
+#BSUB -e logs/fastp_%J_%I.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+
+SHEET="fastq_merged/samples.tsv"
+OUT="trim"
+mkdir -p "$OUT" "$OUT/reports"
+
+line=$(sed -n "${LSB_JOBINDEX}p" "$SHEET")
+sample=$(echo "$line" | awk '{print $1}')
+r1=$(echo "$line" | awk '{print $2}')
+r2=$(echo "$line" | awk '{print $3}')
+
+fastp -i "$r1" -I "$r2"   -o $OUT/${sample}_R1.fastq.gz -O $OUT/${sample}_R2.fastq.gz   -w 8 --detect_adapter_for_pe   --qualified_quality_phred 15 --length_required 50   --json $OUT/reports/${sample}.json --html $OUT/reports/${sample}.html</code></pre><h3>03_align_markdup.lsf (bwa-mem2)</h3><pre><code>#!/bin/bash
+#BSUB -q long
+#BSUB -n 8
+#BSUB -W 08:00
+#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -o logs/aln_%J_%I.out
+#BSUB -e logs/aln_%J_%I.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+
+mkdir -p align tmp/java
+export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx8g"
+
+REF_FASTA="${REF_FASTA:-$PWD/${PWD##*/}.fa}"
+[[ -f "$REF_FASTA" ]] || { echo "Missing REF_FASTA: $REF_FASTA" &gt;&amp;2; exit 2; }
+
+SHEET="fastq_merged/samples.tsv"
+line=$(sed -n "${LSB_JOBINDEX}p" "$SHEET")
+sample=$(echo "$line" | awk '{print $1}')
+r1="trim/${sample}_R1.fastq.gz"
+r2="trim/${sample}_R2.fastq.gz"
+[[ -f "$r1" &amp;&amp; -f "$r2" ]] || { echo "Missing trimmed FASTQs for $sample"; exit 3; }
+
+bwa-mem2 mem -t 8 "$REF_FASTA" "$r1" "$r2"   | samtools sort -@ 4 -o "align/${sample}.sorted.bam" -
+
+gatk --java-options "-Xmx8g" MarkDuplicatesSpark   -I "align/${sample}.sorted.bam" -O "align/${sample}.md.bam" -M "align/${sample}.md.metrics.txt"
+samtools index "align/${sample}.md.bam"
+samtools flagstat "align/${sample}.md.bam" &gt; "align/${sample}.flagstat.txt"</code></pre><h3>03_align_minimap2.lsf (cross-species)</h3><pre><code>#!/bin/bash
+#BSUB -q long
+#BSUB -n 8
+#BSUB -W 08:00
+#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -o logs/aln_mm2_%J_%I.out
+#BSUB -e logs/aln_mm2_%J_%I.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+
+mkdir -p align tmp/java
+export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx8g"
+
+REF_FASTA="${REF_FASTA:-$PWD/${PWD##*/}.fa}"
+[[ -f "$REF_FASTA" ]] || { echo "Missing REF_FASTA: $REF_FASTA" &gt;&amp;2; exit 2; }
+
+SHEET="fastq_merged/samples.tsv"
+line=$(sed -n "${LSB_JOBINDEX}p" "$SHEET")
+sample=$(echo "$line" | awk '{print $1}')
+r1="trim/${sample}_R1.fastq.gz"
+r2="trim/${sample}_R2.fastq.gz"
+[[ -f "$r1" &amp;&amp; -f "$r2" ]] || { echo "Missing trimmed FASTQs for $sample"; exit 3; }
+
+minimap2 -ax sr -t 8 "$REF_FASTA" "$r1" "$r2"   | samtools sort -@ 4 -o "align/${sample}.sorted.bam" -
+
+gatk --java-options "-Xmx8g" MarkDuplicatesSpark   -I "align/${sample}.sorted.bam" -O "align/${sample}.md.bam" -M "align/${sample}.md.metrics.txt"
+samtools index "align/${sample}.md.bam"
+samtools flagstat "align/${sample}.md.bam" &gt; "align/${sample}.flagstat.txt"</code></pre><h3>04_hc_gvcf.lsf</h3><pre><code>#!/bin/bash
+#BSUB -q long
+#BSUB -n 8
+#BSUB -W 08:00
+#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -o logs/hc_%J_%I.out
+#BSUB -e logs/hc_%J_%I.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+
+mkdir -p gvcf tmp/java
+export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx8g"
+
+REF_FASTA="${REF_FASTA:-$PWD/${PWD##*/}.fa}"
+[[ -f "$REF_FASTA" ]] || { echo "Missing REF_FASTA: $REF_FASTA" &gt;&amp;2; exit 2; }
+
+SHEET="fastq_merged/samples.tsv"
+line=$(sed -n "${LSB_JOBINDEX}p" "$SHEET")
+sample=$(echo "$line" | awk '{print $1}')
+
+INBAM="align/${sample}.md.bam"
+[[ -f "$INBAM" ]] || { echo "Missing BAM for $sample: $INBAM" &gt;&amp;2; exit 3; }
+
+gatk --java-options "-Xmx8g" HaplotypeCaller -R "$REF_FASTA" -I "$INBAM" -O "gvcf/${sample}.g.vcf.gz" -ERC GVCF
+tabix -p vcf "gvcf/${sample}.g.vcf.gz"</code></pre><h3>05_joint_geno.lsf</h3><pre><code>#!/bin/bash
+#BSUB -q long
+#BSUB -n 8
+#BSUB -W 08:00
+#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -o logs/jointgeno_%J.out
+#BSUB -e logs/jointgeno_%J.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+mkdir -p vcf tmp/java
+export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx8g"
+
+REF_FASTA="${REF_FASTA:-$PWD/${PWD##*/}.fa}"
+[[ -f "$REF_FASTA" ]] || { echo "Missing REF_FASTA: $REF_FASTA" &gt;&amp;2; exit 2; }
+
+ls gvcf/*.g.vcf.gz &gt; gvcf.files
+gatk CombineGVCFs -R "$REF_FASTA" $(sed 's/^/-V /' gvcf.files) -O vcf/${PWD##*/}.combined.g.vcf.gz
+gatk GenotypeGVCFs -R "$REF_FASTA" -V vcf/${PWD##*/}.combined.g.vcf.gz -O vcf/${PWD##*/}.raw.vcf.gz
+tabix -p vcf vcf/${PWD##*/}.raw.vcf.gz</code></pre><h3>06_filter_vcfs.lsf</h3><pre><code>#!/bin/bash
+#BSUB -q long
+#BSUB -n 8
+#BSUB -W 02:00
+#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -o logs/filt_%J.out
+#BSUB -e logs/filt_%J.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx6g"
+
+REF_FASTA="${REF_FASTA:-$PWD/${PWD##*/}.fa}"
+[[ -f "$REF_FASTA" ]] || { echo "Missing REF_FASTA: $REF_FASTA" &gt;&amp;2; exit 2; }
+
+cd vcf
+sp="${PWD##*/}"
+raw="${sp}.raw.vcf.gz"
+
+gatk SelectVariants -R "$REF_FASTA" -V "$raw" --select-type-to-include SNP   -O ${sp}.raw.snps.vcf.gz
+gatk SelectVariants -R "$REF_FASTA" -V "$raw" --select-type-to-include INDEL -O ${sp}.raw.indels.vcf.gz
+
+gatk VariantFiltration -R "$REF_FASTA" -V ${sp}.raw.snps.vcf.gz   --filter-expression "QD &lt; 2.0"           --filter-name QD2   --filter-expression "FS &gt; 60.0"          --filter-name FS60   --filter-expression "MQ &lt; 40.0"          --filter-name MQ40   --filter-expression "SOR &gt; 3.0"          --filter-name SOR3   --filter-expression "MQRankSum &lt; -12.5"  --filter-name MQRankSum   --filter-expression "ReadPosRankSum &lt; -8.0" --filter-name RPRS   -O ${sp}.snps.filt.vcf.gz
+
+bcftools view -f PASS ${sp}.snps.filt.vcf.gz -Oz -o ${sp}.snps.pass.vcf.gz
+tabix -p vcf ${sp}.snps.pass.vcf.gz
+
+bcftools view -m2 -M2 -v snps ${sp}.snps.pass.vcf.gz   | bcftools +fill-tags -- -t MAF   | bcftools view -i 'MAF&gt;=0.01 &amp;&amp; F_MISSING&lt;=0.2' -Oz -o ${sp}.snps.clean.vcf.gz
+
+tabix -p vcf ${sp}.snps.clean.vcf.gz</code></pre><h2 id='hazel-notes'>Hazel-specific Notes</h2><ul><li>Use queue <code>long</code> for production runs.</li><li><code>rusage[mem=…]</code> is <strong>GB per core</strong>; start with <code>mem=3</code>.</li><li>Throttle big arrays with <code>%24</code> to get dispatched sooner.</li><li>Set Java tmp dir and use OpenJDK 11 for stability:</li></ul><pre><code>export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx8g"</code></pre><h2 id='troubleshooting'>Troubleshooting</h2><ul><li><strong>PEND with mem reason</strong>: lower to <code>rusage[mem=3]</code> (or 2), keep <code>span[hosts=1]</code>, shorten <code>-W</code>.</li><li><strong>Java segfaults</strong>: install <code>openjdk=11</code> in env; set <code>_JAVA_OPTIONS</code> tmpdir.</li><li><strong>MultiQC path not found</strong>: only include dirs that exist (omit <code>trim/reports</code> until fastp finishes).</li><li><strong>Big arrays pend</strong>: resubmit with <code>-J "name[1-N]%24"</code>.</li></ul>
+  <footer>
+    <p>This single-page document can be shared or hosted (e.g., GitHub Pages). Copy blocks have one-click copy buttons.</p>
+  </footer>
+</main>
+<script>
+document.querySelectorAll('pre').forEach((pre) => {
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.textContent = 'Copy';
+  btn.addEventListener('click', () => {
+    const text = pre.innerText;
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = 'Copy', 1200);
+    });
+  });
+  pre.appendChild(btn);
+});
+</script>
+</body>
+</html>
