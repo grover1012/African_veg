@@ -13,15 +13,25 @@ conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="
 mkdir -p gvcf tmp/java
 export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx8g"
 
+# Default to "<species>.fa" in this folder unless REF_FASTA is set
 REF_FASTA="${REF_FASTA:-$PWD/${PWD##*/}.fa}"
-[[ -f "$REF_FASTA" ]] || { echo "Missing REF_FASTA: $REF_FASTA" >&2; exit 2; }
+[[ -f "$REF_FASTA" ]] || { echo "Missing reference: $REF_FASTA" >&2; exit 2; }
 
 SHEET="fastq_merged/samples.tsv"
 line=$(sed -n "${LSB_JOBINDEX}p" "$SHEET")
 sample=$(echo "$line" | awk '{print $1}')
 
 INBAM="align/${sample}.md.bam"
-[[ -f "$INBAM" ]] || { echo "Missing BAM for $sample: $INBAM" >&2; exit 3; }
+OUTG="gvcf/${sample}.g.vcf.gz"
 
-gatk --java-options "-Xmx8g" HaplotypeCaller -R "$REF_FASTA" -I "$INBAM" -O "gvcf/${sample}.g.vcf.gz" -ERC GVCF
-tabix -p vcf "gvcf/${sample}.g.vcf.gz"
+[[ -s "$INBAM" ]] || { echo "Missing BAM: $INBAM" >&2; exit 3; }
+if [[ -s "$OUTG" && -s "${OUTG}.tbi" ]]; then
+  echo "[SKIP] ${OUTG} exists"
+  exit 0
+fi
+
+gatk --java-options "-Xmx8g" HaplotypeCaller \
+  -R "$REF_FASTA" -I "$INBAM" \
+  -O "$OUTG" -ERC GVCF
+
+tabix -p vcf "$OUTG"

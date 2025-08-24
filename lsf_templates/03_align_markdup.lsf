@@ -1,30 +1,48 @@
 #!/bin/bash
-#BSUB -q long
-#BSUB -n 8
-#BSUB -W 08:00
-#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -n 12
+#BSUB -W 12:00
+#BSUB -R "span[hosts=1]"
 #BSUB -o logs/aln_%J_%I.out
 #BSUB -e logs/aln_%J_%I.err
+# Optional: uncomment to request more RAM per core if OOM occurs
+#BSUB -R "rusage[mem=4000]"
+
 set -euo pipefail
 
+# env
 source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
 conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
 
-mkdir -p align tmp/java
+# stable Java tmp for Picard/GATK
+mkdir -p tmp/java align
 export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx8g"
 
+# reference (passed via environment; default to species-local .fa if not set)
 REF_FASTA="${REF_FASTA:-$PWD/${PWD##*/}.fa}"
-[[ -f "$REF_FASTA" ]] || { echo "Missing REF_FASTA: $REF_FASTA" >&2; exit 2; }
+if [[ ! -f "$REF_FASTA" ]]; then
+  echo "ERROR: REF_FASTA not found: $REF_FASTA" >&2
+  exit 2
+fi
 
+# pick this array-task's sample from the sheet
 SHEET="fastq_merged/samples.tsv"
 line=$(sed -n "${LSB_JOBINDEX}p" "$SHEET")
 sample=$(echo "$line" | awk '{print $1}')
 r1="trim/${sample}_R1.fastq.gz"
 r2="trim/${sample}_R2.fastq.gz"
+
+# sanity checks
 [[ -f "$r1" && -f "$r2" ]] || { echo "Missing trimmed FASTQs for $sample"; exit 3; }
 
-bwa-mem2 mem -t 8 "$REF_FASTA" "$r1" "$r2"   | samtools sort -@ 4 -o "align/${sample}.sorted.bam" -
+# align → sort
+bwa-mem2 mem -t 12 "$REF_FASTA" "$r1" "$r2" \
+  | samtools sort -@ 4 -o "align/${sample}.sorted.bam" -
 
-gatk --java-options "-Xmx8g" MarkDuplicatesSpark   -I "align/${sample}.sorted.bam" -O "align/${sample}.md.bam" -M "align/${sample}.md.metrics.txt"
+# mark duplicates + index + stats
+gatk --java-options "-Xmx8g" MarkDuplicatesSpark \
+  -I "align/${sample}.sorted.bam" \
+  -O "align/${sample}.md.bam" \
+  -M "align/${sample}.md.metrics.txt"
+
 samtools index "align/${sample}.md.bam"
 samtools flagstat "align/${sample}.md.bam" > "align/${sample}.flagstat.txt"

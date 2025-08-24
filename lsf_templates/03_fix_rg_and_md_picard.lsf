@@ -1,0 +1,52 @@
+#!/bin/bash
+#BSUB -q long
+#BSUB -n 8
+#BSUB -W 03:00
+#BSUB -R "span[hosts=1] rusage[mem=3]"
+#BSUB -o logs/rgmd_picard_%J_%I.out
+#BSUB -e logs/rgmd_picard_%J_%I.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+
+mkdir -p align tmp/java
+export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx8g"
+
+SHEET="fastq_merged/samples.tsv"
+line=$(sed -n "${LSB_JOBINDEX}p" "$SHEET")
+sample=$(echo "$line" | awk '{print $1}')
+
+IN_SORT="align/${sample}.sorted.bam"
+OUT_MD="align/${sample}.md.bam"
+
+# Skip if md exists & indexed
+if [[ -s "$OUT_MD" && -s "${OUT_MD}.bai" ]]; then
+  echo "[SKIP] $OUT_MD present"
+  exit 0
+fi
+
+[[ -s "$IN_SORT" ]] || { echo "[ERR] Missing $IN_SORT"; exit 2; }
+
+# Ensure coordinate sort
+if ! samtools view -H "$IN_SORT" | grep -q '^@HD.*SO:coordinate'; then
+  samtools sort -@ 4 -o "$IN_SORT.tmp" "$IN_SORT"
+  mv "$IN_SORT.tmp" "$IN_SORT"
+fi
+
+# Add read group if missing
+RG_BAM="$IN_SORT"
+if ! samtools view -H "$IN_SORT" | grep -q '^@RG'; then
+  gatk AddOrReplaceReadGroups \
+    -I "$IN_SORT" -O "align/${sample}.rg.bam" \
+    -ID "$sample" -SM "$sample" -PL ILLUMINA -LB "$sample" -PU unit1
+  RG_BAM="align/${sample}.rg.bam"
+fi
+
+# Mark duplicates (non-Spark) + index
+gatk --java-options "-Xmx8g" MarkDuplicates \
+  -I "$RG_BAM" -O "$OUT_MD" -M "align/${sample}.md.metrics.txt" \
+  --CREATE_INDEX true --VALIDATION_STRINGENCY LENIENT
+
+samtools flagstat "$OUT_MD" > "align/${sample}.flagstat.txt"
+echo "[OK] $sample markdup complete"

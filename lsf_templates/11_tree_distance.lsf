@@ -1,0 +1,22 @@
+#!/bin/bash
+#BSUB -q short
+#BSUB -n 4
+#BSUB -W 00:20
+#BSUB -R "span[hosts=1] rusage[mem=2]"
+#BSUB -o logs/tree_dist_%J.out
+#BSUB -e logs/tree_dist_%J.err
+set -euo pipefail
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+
+sp="${PWD##*/}"
+mkdir -p tree
+
+bed="pca/${sp}.pca.nomiss"
+[ -s "${bed}.bed" ] || bed="pca/${sp}.pca"
+[ -s "${bed}.bed" ] || { echo "ERROR: Missing PLINK set: ${bed}(.bed)."; exit 2; }
+
+plink --bfile "$bed" --allow-extra-chr \
+  --distance square 1-ibs \
+  --out tree/${sp}.ibs

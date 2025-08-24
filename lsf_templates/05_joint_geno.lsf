@@ -9,13 +9,21 @@ set -euo pipefail
 
 source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
 conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+
 mkdir -p vcf tmp/java
 export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx8g"
 
 REF_FASTA="${REF_FASTA:-$PWD/${PWD##*/}.fa}"
-[[ -f "$REF_FASTA" ]] || { echo "Missing REF_FASTA: $REF_FASTA" >&2; exit 2; }
+[[ -f "$REF_FASTA" ]] || { echo "Missing reference: $REF_FASTA" >&2; exit 2; }
 
 ls gvcf/*.g.vcf.gz > gvcf.files
-gatk CombineGVCFs -R "$REF_FASTA" $(sed 's/^/-V /' gvcf.files) -O vcf/${PWD##*/}.combined.g.vcf.gz
-gatk GenotypeGVCFs -R "$REF_FASTA" -V vcf/${PWD##*/}.combined.g.vcf.gz -O vcf/${PWD##*/}.raw.vcf.gz
-tabix -p vcf vcf/${PWD##*/}.raw.vcf.gz
+[[ -s gvcf.files ]] || { echo "No gVCFs found in gvcf/"; exit 3; }
+
+species="${PWD##*/}"
+
+# Combine (handles tens of samples fine; for hundreds use GenomicsDBImport)
+gatk CombineGVCFs -R "$REF_FASTA" $(sed 's/^/-V /' gvcf.files) -O "vcf/${species}.combined.g.vcf.gz"
+
+# Joint genotype
+gatk GenotypeGVCFs -R "$REF_FASTA" -V "vcf/${species}.combined.g.vcf.gz" -O "vcf/${species}.raw.vcf.gz"
+tabix -p vcf "vcf/${species}.raw.vcf.gz"

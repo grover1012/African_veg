@@ -1,6 +1,6 @@
 #!/bin/bash
 #BSUB -q long
-#BSUB -n 8
+#BSUB -n 4
 #BSUB -W 02:00
 #BSUB -R "span[hosts=1] rusage[mem=3]"
 #BSUB -o logs/filt_%J.out
@@ -9,23 +9,39 @@ set -euo pipefail
 
 source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
 conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+
 export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx6g"
 
-REF_FASTA="${REF_FASTA:-$PWD/${PWD##*/}.fa}"
-[[ -f "$REF_FASTA" ]] || { echo "Missing REF_FASTA: $REF_FASTA" >&2; exit 2; }
+# species name BEFORE cd vcf
+species="${PWD##*/}"
+REF_FASTA="${REF_FASTA:-$PWD/${species}.fa}"
+[[ -f "$REF_FASTA" ]] || { echo "Missing reference: $REF_FASTA" >&2; exit 2; }
 
 cd vcf
-sp="${PWD##*/}"
-raw="${sp}.raw.vcf.gz"
+raw="${species}.raw.vcf.gz"
+[[ -s "$raw" ]] || { echo "Missing $raw"; exit 3; }
 
-gatk SelectVariants -R "$REF_FASTA" -V "$raw" --select-type-to-include SNP   -O ${sp}.raw.snps.vcf.gz
-gatk SelectVariants -R "$REF_FASTA" -V "$raw" --select-type-to-include INDEL -O ${sp}.raw.indels.vcf.gz
+# Split by type
+gatk SelectVariants -R "$REF_FASTA" -V "$raw" --select-type-to-include SNP   -O ${species}.raw.snps.vcf.gz
+gatk SelectVariants -R "$REF_FASTA" -V "$raw" --select-type-to-include INDEL -O ${species}.raw.indels.vcf.gz
 
-gatk VariantFiltration -R "$REF_FASTA" -V ${sp}.raw.snps.vcf.gz   --filter-expression "QD < 2.0"           --filter-name QD2   --filter-expression "FS > 60.0"          --filter-name FS60   --filter-expression "MQ < 40.0"          --filter-name MQ40   --filter-expression "SOR > 3.0"          --filter-name SOR3   --filter-expression "MQRankSum < -12.5"  --filter-name MQRankSum   --filter-expression "ReadPosRankSum < -8.0" --filter-name RPRS   -O ${sp}.snps.filt.vcf.gz
+# SNP hard-filters
+gatk VariantFiltration -R "$REF_FASTA" -V ${species}.raw.snps.vcf.gz \
+  --filter-expression "QD < 2.0"              --filter-name QD2 \
+  --filter-expression "FS > 60.0"             --filter-name FS60 \
+  --filter-expression "MQ < 40.0"             --filter-name MQ40 \
+  --filter-expression "SOR > 3.0"             --filter-name SOR3 \
+  --filter-expression "MQRankSum < -12.5"     --filter-name MQRankSum \
+  --filter-expression "ReadPosRankSum < -8.0" --filter-name RPRS \
+  -O ${species}.snps.filt.vcf.gz
 
-bcftools view -f PASS ${sp}.snps.filt.vcf.gz -Oz -o ${sp}.snps.pass.vcf.gz
-tabix -p vcf ${sp}.snps.pass.vcf.gz
+# Keep PASS, biallelic, light MAF/missingness filters
+bcftools view -f PASS ${species}.snps.filt.vcf.gz -Oz -o ${species}.snps.pass.vcf.gz
+tabix -p vcf ${species}.snps.pass.vcf.gz
 
-bcftools view -m2 -M2 -v snps ${sp}.snps.pass.vcf.gz   | bcftools +fill-tags -- -t MAF   | bcftools view -i 'MAF>=0.01 && F_MISSING<=0.2' -Oz -o ${sp}.snps.clean.vcf.gz
+bcftools view -m2 -M2 -v snps ${species}.snps.pass.vcf.gz \
+  | bcftools +fill-tags -- -t MAF,F_MISSING \
+  | bcftools view -i 'MAF>=0.01 && F_MISSING<=0.2' -Oz -o ${species}.snps.clean.vcf.gz
 
-tabix -p vcf ${sp}.snps.clean.vcf.gz
+tabix -p vcf ${species}.snps.clean.vcf.gz
+echo "[OK] Wrote ${species}.snps.clean.vcf.gz"
