@@ -1,0 +1,143 @@
+cd /share/africanveg/gwnjeri/AIV_project/African_veg
+mkdir -p docs
+cat > docs/index.html <<'HTML'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIV WGS Pipeline — One-Liners</title>
+<style>
+  :root{--bg:#0b1020;--card:#12172b;--txt:#f0f3ff;--muted:#aab3d9;--acc:#6ea8fe;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--txt);font:16px/1.5 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1100px;margin:0 auto;padding:24px}
+  h1{font-size:28px;margin:0 0 12px}
+  h2{font-size:20px;margin:26px 0 10px;color:#cfd6ff}
+  .card{background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px 14px 8px;margin:12px 0}
+  .note{color:var(--muted);font-size:14px;margin:6px 0 12px}
+  pre{margin:0;position:relative;white-space:pre-wrap;word-break:break-word}
+  code{display:block;background:#0e1324;padding:12px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.06);overflow:auto}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .btn{cursor:pointer;background:var(--acc);border:0;color:#071022;padding:8px 12px;border-radius:10px;font-weight:600}
+  .btn:active{transform:translateY(1px)}
+  .small{font-size:13px;color:var(--muted)}
+  .toc a{color:#a5c5ff;text-decoration:none}
+  .toc{display:flex;flex-wrap:wrap;gap:10px}
+  .toc a{background:#111737;border:1px solid rgba(255,255,255,.06);padding:6px 10px;border-radius:999px}
+</style>
+<script>
+function copyBtn(btn){
+  const pre = btn.closest('.card').querySelector('code');
+  const txt = pre.innerText;
+  navigator.clipboard.writeText(txt).then(()=>{
+    const old = btn.innerText; btn.innerText = "Copied!";
+    setTimeout(()=>btn.innerText=old,1200);
+  });
+}
+</script>
+</head>
+<body>
+<div class="wrap">
+  <h1>AIV WGS Pipeline — Quick Submit (per-species)</h1>
+  <div class="note">Run these from <b>/share/.../AIV_project/&lt;Species&gt;/</b>. Each job name auto-includes the species (<code>${PWD##*/}</code>).</div>
+
+  <div class="card">
+    <div class="row">
+      <button class="btn" onclick="copyBtn(this)">Copy</button>
+    </div>
+    <div class="note">Set once per session:</div>
+    <pre><code>export PROJ_ROOT=/share/africanveg/gwnjeri/AIV_project</code></pre>
+  </div>
+
+  <div class="toc small">
+    <a href="#s00">00 RefIndex</a><a href="#s01">01 FastQC pre</a><a href="#s02">02 fastp</a><a href="#s01b">01b FastQC post</a>
+    <a href="#s03">03 Align</a><a href="#s03fix">03fix RG+MD</a><a href="#s04">04 gVCFs</a><a href="#s05">05 Joint</a>
+    <a href="#s06">06 Filter</a><a href="#s07">07 PCA (PLINK2)</a><a href="#s07c">07c PCA nomiss</a>
+    <a href="#s08">08 PCA (SNPRelate)</a><a href="#s10">10 Plot PCA</a><a href="#s11">11 IBS</a><a href="#s12">12 NJ tree</a><a href="#s12b">12b SNPhylo</a>
+  </div>
+
+  <div id="s00" class="card"><h2>00 — Reference index</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; REF_FASTA="$PWD/${sp}.fa" bsub -q long -n 4 -W 01:00 -R 'span[hosts=1] rusage[mem=4]' -J "${sp}__refidx" < "$PROJ_ROOT/lsf_templates/00_prep_ref.lsf"</code></pre>
+  </div>
+
+  <div id="s01" class="card"><h2>01 — FastQC (pre-trim)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; bsub -q long -n 8 -W 01:00 -R 'span[hosts=1] rusage[mem=4]' -J "${sp}__fqcp_pre" < "$PROJ_ROOT/lsf_templates/01_fastqc_pre.lsf"</code></pre>
+  </div>
+
+  <div id="s02" class="card"><h2>02 — fastp trimming (array)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; N=$(wc -l < fastq_merged/samples.tsv); bsub -q long -n 8 -W 02:00 -R 'span[hosts=1] rusage[mem=4]' -J "${sp}__fastp[1-$N]%24" < "$PROJ_ROOT/lsf_templates/02_fastp.lsf"</code></pre>
+  </div>
+
+  <div id="s01b" class="card"><h2>01b — FastQC (post-trim)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; bsub -q long -n 8 -W 01:00 -R 'span[hosts=1] rusage[mem=4]' -J "${sp}__fqcp_post" < "$PROJ_ROOT/lsf_templates/01b_fastqc_post.lsf"</code></pre>
+  </div>
+
+  <div id="s03" class="card"><h2>03 — Align + MarkDuplicates (array)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; N=$(wc -l < fastq_merged/samples.tsv); bsub -q long -n 8 -W 08:00 -R 'span[hosts=1] rusage[mem=6]' -J "${sp}__aln[1-$N]%24" < "$PROJ_ROOT/lsf_templates/03_align_markdup.lsf"</code></pre>
+  </div>
+
+  <div id="s03fix" class="card"><h2>03fix — Ensure RG+MD (array)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; N=$(wc -l < fastq_merged/samples.tsv); bsub -q long -n 4 -W 02:00 -R 'span[hosts=1] rusage[mem=4]' -J "${sp}__rgfix[1-$N]%24" < "$PROJ_ROOT/lsf_templates/03_fix_rg_and_md_picard.lsf"</code></pre>
+  </div>
+
+  <div id="s04" class="card"><h2>04 — gVCFs (HaplotypeCaller, array)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; N=$(wc -l < fastq_merged/samples.tsv); bsub -q long -n 8 -W 08:00 -R 'span[hosts=1] rusage[mem=6]' -J "${sp}__hc[1-$N]%24" < "$PROJ_ROOT/lsf_templates/04_hc_gvcf.lsf"</code></pre>
+  </div>
+
+  <div id="s05" class="card"><h2>05 — Joint genotyping</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; bsub -q long -n 8 -W 08:00 -R 'span[hosts=1] rusage[mem=8]' -J "${sp}__joint" < "$PROJ_ROOT/lsf_templates/05_joint_geno.lsf"</code></pre>
+  </div>
+
+  <div id="s06" class="card"><h2>06 — Filter VCFs → clean SNPs</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; bsub -q long -n 8 -W 02:00 -R 'span[hosts=1] rusage[mem=6]' -J "${sp}__filter" < "$PROJ_ROOT/lsf_templates/06_filter_vcfs.lsf"</code></pre>
+  </div>
+
+  <div id="s07" class="card"><h2>07 — PCA build (PLINK2)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; bsub -q short -n 2 -W 00:45 -R 'span[hosts=1] rusage[mem=2]' -J "${sp}__pca" < "$PROJ_ROOT/lsf_templates/07_plink2_pca_all.lsf"</code></pre>
+  </div>
+
+  <div id="s07c" class="card"><h2>07c — PCA (drop empty samples & redo)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; bsub -q short -n 2 -W 00:20 -R 'span[hosts=1] rusage[mem=2]' -J "${sp}__pca_nomiss" < "$PROJ_ROOT/lsf_templates/07c_pca_nomiss.lsf"</code></pre>
+  </div>
+
+  <div id="s08" class="card"><h2>08 — PCA (SNPRelate)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; bsub -q short -n 1 -W 00:30 -R 'span[hosts=1] rusage[mem=4]' -J "${sp}__snprelate" < "$PROJ_ROOT/lsf_templates/08_snprelate_pca.lsf"</code></pre>
+  </div>
+
+  <div id="s10" class="card"><h2>10 — Plot PCA (ggrepel labels)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; bsub -q short -n 1 -W 00:20 -R 'span[hosts=1] rusage[mem=2]' -J "${sp}__pca_plot" < "$PROJ_ROOT/lsf_templates/10_plot_pca_ggrepel.lsf"</code></pre>
+  </div>
+
+  <div id="s11" class="card"><h2>11 — IBS distance (PLINK)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; bsub -q short -n 4 -W 00:20 -R 'span[hosts=1] rusage[mem=2]' -J "${sp}__ibs" < "$PROJ_ROOT/lsf_templates/11_tree_distance.lsf"</code></pre>
+  </div>
+
+  <div id="s12" class="card"><h2>12 — NJ tree (ape)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; bsub -q short -n 1 -W 00:10 -R 'span[hosts=1] rusage[mem=2]' -J "${sp}__tree" < "$PROJ_ROOT/lsf_templates/12_tree_nj_pretty.lsf"</code></pre>
+  </div>
+
+  <div id="s12b" class="card"><h2>12b — SNPhylo tree (alternative)</h2>
+    <div class="row"><button class="btn" onclick="copyBtn(this)">Copy</button></div>
+<pre><code>sp=${PWD##*/}; bsub -q short -n 2 -W 00:45 -R 'span[hosts=1] rusage[mem=4]' -J "${sp}__snphylo" < "$PROJ_ROOT/lsf_templates/12b_snphylo.lsf"</code></pre>
+  </div>
+
+  <p class="small">Tip: check pending reasons: <code>bjobs -l &lt;JOBID&gt; | sed -n '/PENDING REASONS/,+30p'</code></p>
+</div>
+</body>
+</html>
+HTML
