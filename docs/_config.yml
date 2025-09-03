@@ -1,2 +1,6 @@
-theme: minima
-title: African_veg
+remote_theme: just-the-docs/just-the-docs
+title: African_veg Workflows
+description: Copy-paste LSF scripts and runbooks
+enable_copy_code_button: true
+aux_links:
+  Repository: https://github.com/grover1012/African_veg

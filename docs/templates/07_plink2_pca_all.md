@@ -1,0 +1,42 @@
+---
+title: 07_plink2_pca_all.lsf
+parent: LSF Templates
+nav_order: 10
+---
+
+# 07_plink2_pca_all.lsf
+
+```bash
+#!/bin/bash
+#BSUB -q short
+#BSUB -n 2
+#BSUB -W 00:45
+#BSUB -R "span[hosts=1] rusage[mem=2]"
+#BSUB -o logs/pca2_%J.out
+#BSUB -e logs/pca2_%J.err
+set -euo pipefail
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+sp="${PWD##*/}"; mkdir -p pca
+invcf="vcf/${sp}.snps.clean.vcf.gz"; [ -s "$invcf" ] || { echo "Missing $invcf"; exit 2; }
+# unique IDs, allow non-human contigs
+plink2 --vcf "$invcf" --double-id --allow-extra-chr \
+  --set-all-var-ids @:#:\$r:\$a --new-id-max-allele-len 300 missing \
+  --make-bed --out pca/${sp}.clean
+nsamp=$(wc -l < pca/${sp}.clean.fam)
+if [ "$nsamp" -lt 50 ]; then
+  plink2 --bfile pca/${sp}.clean --allow-extra-chr --maf 0.05 --geno 0.1 --thin 0.10 \
+    --make-bed --out pca/${sp}.pca
+else
+  plink2 --bfile pca/${sp}.clean --allow-extra-chr --indep-pairwise 50 5 0.2 --out pca/${sp}.prune
+  sort -u pca/${sp}.prune.prune.in > pca/${sp}.keep.snps
+  plink2 --bfile pca/${sp}.clean --allow-extra-chr --extract pca/${sp}.keep.snps \
+    --make-bed --out pca/${sp}.pca
+fi
+plink2 --bfile pca/${sp}.pca --allow-extra-chr --pca 20 header tabs --out pca/${sp}
+[ -s pca/${sp}.eigenvec ] && [ -s pca/${sp}.eigenval ] && ls -lh pca/${sp}.eigen*
+
+```
+
+**Submit**
+

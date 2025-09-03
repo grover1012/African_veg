@@ -1,0 +1,121 @@
+---
+title: 09_plot_pca_R.lsf
+parent: LSF Templates
+nav_order: 10
+---
+
+# 09_plot_pca_R.lsf
+
+```bash
+#!/bin/bash
+#BSUB -q short
+#BSUB -n 1
+#BSUB -W 00:20
+#BSUB -R "span[hosts=1] rusage[mem=2]"
+#BSUB -o logs/pca_plot_%J.out
+#BSUB -e logs/pca_plot_%J.err
+set -euo pipefail
+
+# Rscript from your env
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+
+mkdir -p pca
+
+Rscript - <<'RS'
+sp <- basename(getwd())
+evf <- file.path("pca", paste0(sp, ".eigenvec"))
+eaf <- file.path("pca", paste0(sp, ".eigenval"))
+stopifnot(file.exists(evf), file.exists(eaf))
+
+# Try header=TRUE first (when PLINK ran with 'header tabs'); fall back to no header
+ev <- tryCatch(read.table(evf, header=TRUE, sep="\t", check.names=FALSE, stringsAsFactors=FALSE),
+               error=function(e) read.table(evf, header=FALSE, sep="", check.names=FALSE, stringsAsFactors=FALSE))
+
+# Ensure column names (FID, IID, PC1, PC2, ...)
+if (!any(grepl("^PC1$", names(ev)))) {
+  if (ncol(ev) >= 2) {
+    names(ev)[1:2] <- c("FID","IID")
+    for (i in 3:ncol(ev)) names(ev)[i] <- paste0("PC", i-2)
+  }
+}
+# Read eigenvalues, variance explained
+evals <- scan(eaf, quiet=TRUE)
+varpct <- 100 * evals / sum(evals)
+pc1lab <- sprintf("PC1 (%.1f%%)", varpct[1])
+pc2lab <- sprintf("PC2 (%.1f%%)", varpct[2])
+pc3lab <- if (length(varpct) >= 3) sprintf("PC3 (%.1f%%)", varpct[3]) else "PC3"
+
+# Optional grouping: pca/<species>.groups.tsv with: IID<TAB>Group
+grpfile <- file.path("pca", paste0(sp, ".groups.tsv"))
+col <- rep("black", nrow(ev)); pch <- rep(19, nrow(ev)); lgd <- NULL
+if (file.exists(grpfile)) {
+  gdf <- read.table(grpfile, header=FALSE, sep="\t", col.names=c("IID","Group"), stringsAsFactors=FALSE)
+  m <- match(ev$IID, gdf$IID)
+  group <- ifelse(is.na(m), "NA", gdf$Group[m])
+  fac <- factor(group)
+  cols <- grDevices::rainbow(length(levels(fac)))
+  col <- cols[as.integer(fac)]
+  lgd <- list(labels=levels(fac), cols=cols)
+}
+
+# small label offset so text isn't on top of points
+dx <- diff(range(ev$PC1)) * 0.006
+dy <- diff(range(ev$PC2)) * 0.006
+dy3<- if ("PC3" %in% names(ev)) diff(range(ev$PC3)) * 0.006 else 0.006
+
+make_scatter <- function(x, y, xlab, ylab, main, filebase, y3=FALSE) {
+  # Unlabeled PNG
+  png(file.path("pca", paste0(filebase, ".png")), width=1400, height=1050, res=150)
+  plot(x, y, xlab=xlab, ylab=ylab, main=main, pch=pch, col=col, cex=1.1)
+  grid::grid()
+  if (!is.null(lgd)) legend("topright", legend=lgd$labels, col=lgd$cols, pch=19, bty="n")
+  dev.off()
+  # Labeled PNG
+  png(file.path("pca", paste0(filebase, "_Labeled.png")), width=2000, height=1400, res=150)
+  plot(x, y, xlab=xlab, ylab=ylab, main=paste0(main," (labeled)"), pch=pch, col=col, cex=1.1)
+  grid::grid(); if (!is.null(lgd)) legend("topright", legend=lgd$labels, col=lgd$cols, pch=19, bty="n")
+  if (!y3) {
+    text(x+dx, y+dy, labels=ev$IID, cex=0.7, col=col)
+  } else {
+    text(x+dx, y+dy3, labels=ev$IID, cex=0.7, col=col)
+  }
+  dev.off()
+  # Also PDFs (nice for papers)
+  pdf(file.path("pca", paste0(filebase, "_Labeled.pdf")), width=10, height=7)
+  par(mar=c(5,5,4,2)+0.1)
+  plot(x, y, xlab=xlab, ylab=ylab, main=paste0(main," (labeled)"), pch=pch, col=col, cex=1.1)
+  grid::grid(); if (!is.null(lgd)) legend("topright", legend=lgd$labels, col=lgd$cols, pch=19, bty="n")
+  if (!y3) {
+    text(x+dx, y+dy, labels=ev$IID, cex=0.7, col=col)
+  } else {
+    text(x+dx, y+dy3, labels=ev$IID, cex=0.7, col=col)
+  }
+  dev.off()
+}
+
+# PC1 vs PC2
+make_scatter(ev$PC1, ev$PC2, pc1lab, pc2lab, paste0(sp, " PCA (PC1 vs PC2)"), paste0(sp, "_PCA_PC1_PC2"))
+
+# PC1 vs PC3 (if available)
+if ("PC3" %in% names(ev)) {
+  make_scatter(ev$PC1, ev$PC3, pc1lab, pc3lab, paste0(sp, " PCA (PC1 vs PC3)"), paste0(sp, "_PCA_PC1_PC3"), y3=TRUE)
+}
+
+# Scree plot (unchanged)
+png(file.path("pca", paste0(sp, "_PCA_scree.png")), width=1200, height=900, res=150)
+barplot(varpct[1:min(20, length(varpct))], names.arg=1:min(20,length(varpct)),
+        xlab="PC", ylab="% variance explained", main=paste0(sp, " PCA Scree (top 20)"))
+grid::grid()
+dev.off()
+
+# Variance table
+write.table(data.frame(PC=seq_along(evals), Eigenval=evals, Percent=varpct),
+            file=file.path("pca", paste0(sp, "_PCA_variance.tsv")),
+            sep="\t", row.names=FALSE, quote=FALSE)
+RS
+
+```
+
+**Submit**
+

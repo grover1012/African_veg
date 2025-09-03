@@ -1,0 +1,27 @@
+---
+title: 07c_pca_nomiss.lsf
+parent: LSF Templates
+nav_order: 10
+---
+
+# 07c_pca_nomiss.lsf
+
+```bash
+#!/bin/bash
+#BSUB -q short
+#BSUB -n 2
+#BSUB -W 00:20
+#BSUB -R "span[hosts=1] rusage[mem=2]"
+#BSUB -o logs/pca_nomiss_%J.out
+#BSUB -e logs/pca_nomiss_%J.err
+set -euo pipefail
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+sp="${PWD##*/}"
+plink2 --bfile pca/${sp}.pca --allow-extra-chr --mind 0.99 --make-bed --out pca/${sp}.pca.nomiss
+plink2 --bfile pca/${sp}.pca.nomiss --allow-extra-chr --pca 20 header tabs --out pca/${sp}_nomiss
+
+```
+
+**Submit**
+

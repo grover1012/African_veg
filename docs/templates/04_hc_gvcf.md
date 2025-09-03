@@ -1,0 +1,29 @@
+---
+title: 04_hc_gvcf.lsf
+parent: LSF Templates
+nav_order: 10
+---
+
+# 04_hc_gvcf.lsf
+
+```bash
+#!/bin/bash
+#BSUB -q long
+#BSUB -n 8
+#BSUB -W 08:00
+#BSUB -R "span[hosts=1] rusage[mem=6]"
+#BSUB -o logs/hc_%J_%I.out
+#BSUB -e logs/hc_%J_%I.err
+set -euo pipefail
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
+mkdir -p gvcf tmp/java; export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx6g"
+REF_FASTA="${REF_FASTA:-$PWD/${PWD##*/}.fa}"; [ -f "$REF_FASTA" ] || { echo "Missing $REF_FASTA"; exit 2; }
+line=$(sed -n "${LSB_JOBINDEX}p" fastq_merged/samples.tsv); s=$(awk '{print $1}' <<<"$line")
+bam="align/${s}.markdup.bam"; [ -s "$bam" ] || bam="align/${s}.rg.md.bam"
+gatk HaplotypeCaller -R "$REF_FASTA" -I "$bam" -O "gvcf/${s}.g.vcf.gz" -ERC GVCF
+
+```
+
+**Submit**
+
