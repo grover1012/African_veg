@@ -3,6 +3,7 @@
 **Last updated:** 2025-08-22
 
 Self-contained runbook for species-wise short-read variant discovery on NCSU Hazel (LSF). Includes copy‑paste job scripts, correct Hazel resource flags (mem in GB/core), and troubleshooting notes.
+Link to run the scripts: https://grover1012.github.io/African_veg/
 
 ## Quick Start (per species)
 
