@@ -5,12 +5,8 @@
 #BSUB -o logs/fqcp_post_%J.out
 #BSUB -e logs/fqcp_post_%J.err
 set -euo pipefail
-
 source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
 conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
-
-# Java stability (FastQC):
-mkdir -p tmp/java fastqc_post
-export _JAVA_OPTIONS="-Djava.io.tmpdir=$PWD/tmp/java -Xmx4g"
-
+mkdir -p fastqc_post
 fastqc -t 8 -o fastqc_post trim/*.fastq.gz
+multiqc -o fastqc_post fastqc_post

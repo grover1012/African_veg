@@ -1,0 +1,109 @@
+#!/bin/bash
+#BSUB -q short
+#BSUB -n 1
+#BSUB -W 00:30
+#BSUB -R "span[hosts=1] rusage[mem=4]"
+#BSUB -J snprelate_pca
+#BSUB -o logs/snprelate_pca_%J.out
+#BSUB -e logs/snprelate_pca_%J.err
+
+set -euo pipefail
+mkdir -p logs pca
+
+source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
+conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new
+
+export PROJ_ROOT="/share/africanveg/gwnjeri/AIV_project"   # absolute for map lookup
+# export SPECIES="Solanum_nigrum"                           # uncomment to override
+
+sp="${PWD##*/}"
+invcf="vcf/${sp}.snps.clean.vcf.gz"
+[ -s "$invcf" ] || { echo "Missing $invcf"; exit 2; }
+
+Rscript - <<'RS'
+suppressPackageStartupMessages({
+  library(gdsfmt); library(SNPRelate); library(ggplot2); library(ggrepel)
+})
+
+# species from env or folder
+sp <- if (nzchar(Sys.getenv("SPECIES"))) Sys.getenv("SPECIES") else basename(getwd())
+
+vcf <- file.path("vcf", paste0(sp, ".snps.clean.vcf.gz"))
+gds <- file.path("pca", paste0(sp, ".clean.gds"))
+
+if (!file.exists(gds)) {
+  snpgdsVCF2GDS(vcf, gds, method = "biallelic.only", ignore.chr.prefix = "chr")
+}
+genofile <- snpgdsOpen(gds); set.seed(1)
+
+snpset <- snpgdsLDpruning(genofile,
+                          ld.threshold = 0.2, maf = 0.05, missing.rate = 0.2,
+                          autosome.only = FALSE, method = "corr")
+keep <- unlist(snpset, use.names = FALSE)
+
+pca <- snpgdsPCA(genofile, snp.id = keep, autosome.only = FALSE)
+
+ev <- data.frame(Sample = pca$sample.id,
+                 PC1 = pca$eigenvect[,1],
+                 PC2 = pca$eigenvect[,2],
+                 stringsAsFactors = FALSE)
+var <- round(100 * pca$varprop[1:2], 1)
+
+# ---- SampleID -> Entryname mapping (check absolute, parent, local) ----
+cand <- c(file.path(Sys.getenv("PROJ_ROOT"), "meta", paste0(sp, "_sample_map.tsv")),
+          file.path("..", "meta", paste0(sp, "_sample_map.tsv")),
+          file.path("meta", paste0(sp, "_sample_map.tsv")),
+          file.path(paste0(sp, "_sample_map.tsv")))
+cand <- cand[file.exists(cand)]
+map_path <- if (length(cand)) cand[1] else NA_character_
+
+read_map <- function(p) {
+  df <- tryCatch(read.table(p, header=TRUE, sep="\t", quote="", comment.char="",
+                            check.names=FALSE, stringsAsFactors=FALSE),
+                 error=function(e) NULL)
+  if (is.null(df)) return(NULL)
+  names(df) <- tolower(names(df))
+  sid <- c("sampleid","sample_id","sample")
+  en  <- c("entryname","accession","name","label")
+  sid_col <- intersect(sid, names(df))[1]
+  en_col  <- intersect(en,  names(df))[1]
+  if (is.na(sid_col) || is.na(en_col)) return(NULL)
+  out <- df[, c(sid_col, en_col)]
+  names(out) <- c("Sample","Entryname")
+  out
+}
+
+map <- if (!is.na(map_path)) read_map(map_path) else NULL
+if (!is.null(map)) {
+  idx <- match(ev$Sample, map$Sample)
+  ev$Entryname <- map$Entryname[idx]
+  ev$Label <- ifelse(is.na(ev$Entryname) | ev$Entryname=="", ev$Sample, ev$Entryname)
+} else {
+  message("No mapping file found. Using Sample IDs.")
+  ev$Label <- ev$Sample
+}
+# -----------------------------------------------------------------------
+
+write.table(cbind(Sample = ev$Sample, pca$eigenvect),
+            file = file.path("pca", paste0(sp, ".SNPRelate.eigenvec.tsv")),
+            sep = "\t", quote = FALSE, row.names = FALSE)
+
+write.table(pca$eigenval,
+            file = file.path("pca", paste0(sp, ".SNPRelate.eigenval.tsv")),
+            quote = FALSE, col.names = FALSE)
+
+p <- ggplot(ev, aes(PC1, PC2, label = Label)) +
+  geom_point(size = 2.6, alpha = .9) +
+  ggrepel::geom_text_repel(size = 3.2, max.overlaps = Inf,
+                           box.padding = .35, point.padding = .25,
+                           segment.size = .3) +
+  labs(title = paste0(sp, " PCA (SNPRelate)"),
+       x = paste0("PC1 (", var[1], "%)"),
+       y = paste0("PC2 (", var[2], "%)")) +
+  theme_classic(base_size = 14)
+
+ggsave(file.path("pca", paste0(sp, "_SNPRelate_PC1_PC2_Labeled.png")),
+       p, width = 10, height = 8, dpi = 300)
+
+snpgdsClose(genofile)
+RS

@@ -3,95 +3,21 @@
 #BSUB -n 1
 #BSUB -W 00:20
 #BSUB -R "span[hosts=1] rusage[mem=2]"
-#BSUB -o logs/pca_repel_%J.out
-#BSUB -e logs/pca_repel_%J.err
+#BSUB -o logs/pca_plot_%J.out
+#BSUB -e logs/pca_plot_%J.err
 set -euo pipefail
-
-# Rscript from your env
 source /usr/local/apps/miniconda20240526/etc/profile.d/conda.sh
 conda activate /share/africanveg/gwnjeri/conda_envs/aiv_env_new || export PATH="/share/africanveg/gwnjeri/conda_envs/aiv_env_new/bin:$PATH"
-
-# Try to ensure ggplot2 + ggrepel are present (fast conda install; no ~/.condarc issues)
-if ! Rscript -e 'q(status=!(requireNamespace("ggplot2",quietly=TRUE)&&requireNamespace("ggrepel",quietly=TRUE)))'; then
-  CONDARC=/dev/null conda install -y -p /share/africanveg/gwnjeri/conda_envs/aiv_env_new -c conda-forge r-ggplot2 r-ggrepel || true
-fi
-
+sp="${PWD##*/}"; evf="pca/${sp}.eigenvec"; [ -s "$evf" ] || evf="pca/${sp}.SNPRelate.eigenvec.tsv"; [ -s "$evf" ] || { echo "No eigenvec found"; exit 2; }
 Rscript - <<'RS'
-sp <- basename(getwd())
-evf <- file.path("pca", paste0(sp, ".eigenvec"))
-eaf <- file.path("pca", paste0(sp, ".eigenval"))
-stopifnot(file.exists(evf), file.exists(eaf))
-
-# read eigenvectors (headered from plink --pca header tabs)
-ev <- tryCatch(read.table(evf, header=TRUE, sep="\t", check.names=FALSE, stringsAsFactors=FALSE),
-               error=function(e) read.table(evf, header=FALSE, sep="", stringsAsFactors=FALSE))
-if (!any(grepl("^PC1$", names(ev)))) {
-  names(ev)[1:2] <- c("FID","IID")
-  for (i in 3:ncol(ev)) names(ev)[i] <- paste0("PC", i-2)
-}
-evals <- scan(eaf, quiet=TRUE)
-varpct <- 100*evals/sum(evals)
-
-# optional groups (color) and custom labels
-grpfile <- file.path("pca", paste0(sp, ".groups.tsv"))  # IID\tGroup
-labfile <- file.path("pca", paste0(sp, ".labels.tsv"))  # IID\tLabel
-ev$Group <- "all"
-if (file.exists(grpfile)) {
-  g <- read.table(grpfile, sep="\t", header=FALSE, col.names=c("IID","Group"), stringsAsFactors=FALSE)
-  ev$Group <- ifelse(ev$IID %in% g$IID, g$Group[match(ev$IID, g$IID)], "NA")
-}
-ev$Label <- ev$IID
-if (file.exists(labfile)) {
-  l <- read.table(labfile, sep="\t", header=FALSE, col.names=c("IID","Label"), stringsAsFactors=FALSE)
-  ev$Label <- ifelse(ev$IID %in% l$IID, l$Label[match(ev$IID, l$IID)], ev$IID)
-}
-
-ok_gg <- suppressWarnings(requireNamespace("ggplot2", quietly=TRUE) && requireNamespace("ggrepel", quietly=TRUE))
-if (ok_gg) {
-  library(ggplot2); library(ggrepel)
-  mkplot <- function(x, y, xl, yl, outpng, ttl) {
-    p <- ggplot(ev, aes_string(x, y, label="Label", color="Group")) +
-      geom_point(size=2.8, alpha=0.85) +
-      geom_text_repel(size=3.2, max.overlaps=Inf, min.segment.length=0,
-                      box.padding=0.35, point.padding=0.25, segment.size=0.3) +
-      labs(x=xl, y=yl, title=ttl, color="Group") +
-      theme_classic(base_size=15) +
-      theme(legend.position="right")
-    ggsave(file.path("pca", outpng), p, width=12, height=9, dpi=300)
-  }
-  mkplot("PC1","PC2",
-         sprintf("PC1 (%.1f%%)", varpct[1]),
-         sprintf("PC2 (%.1f%%)", varpct[2]),
-         paste0(sp,"_PCA_PC1_PC2_Labeled.png"),
-         paste0(sp," PCA (PC1 vs PC2)"))
-  if ("PC3" %in% names(ev)) {
-    mkplot("PC1","PC3",
-           sprintf("PC1 (%.1f%%)", varpct[1]),
-           sprintf("PC3 (%.1f%%)", varpct[3]),
-           paste0(sp,"_PCA_PC1_PC3_Labeled.png"),
-           paste0(sp," PCA (PC1 vs PC3)"))
-  }
-} else {
-  # Fallback: big canvas + larger symbols + offset labels (base R)
-  png(file.path("pca", paste0(sp,"_PCA_PC1_PC2_Labeled.png")), width=3600, height=2700, res=220)
-  plot(ev$PC1, ev$PC2, xlab=sprintf("PC1 (%.1f%%)", varpct[1]), ylab=sprintf("PC2 (%.1f%%)", varpct[2]),
-       main=paste0(sp," PCA (PC1 vs PC2)"), pch=19, cex=1.7)
-  dx <- diff(range(ev$PC1))*0.006; dy <- diff(range(ev$PC2))*0.006
-  text(ev$PC1+dx, ev$PC2+dy, labels=ev$Label, cex=0.9)
-  dev.off()
-  if ("PC3" %in% names(ev)) {
-    png(file.path("pca", paste0(sp,"_PCA_PC1_PC3_Labeled.png")), width=3600, height=2700, res=220)
-    plot(ev$PC1, ev$PC3, xlab=sprintf("PC1 (%.1f%%)", varpct[1]), ylab=sprintf("PC3 (%.1f%%)", varpct[3]),
-         main=paste0(sp," PCA (PC1 vs PC3)"), pch=19, cex=1.7)
-    dx <- diff(range(ev$PC1))*0.006; dy <- diff(range(ev$PC3))*0.006
-    text(ev$PC1+dx, ev$PC3+dy, labels=ev$Label, cex=0.9)
-    dev.off()
-  }
-}
-# Scree (all PCs)
-png(file.path("pca", paste0(sp, "_PCA_scree.png")), width=2000, height=1200, res=200)
-barplot(varpct, names.arg=seq_along(varpct),
-        xlab="PC", ylab="% variance explained",
-        main=paste0(sp, " PCA Scree (all PCs)"))
-dev.off()
+suppressPackageStartupMessages({library(ggplot2);library(ggrepel)})
+sp <- basename(getwd()); evf <- if (file.exists(file.path("pca",paste0(sp,".eigenvec")))) file.path("pca",paste0(sp,".eigenvec")) else file.path("pca",paste0(sp,".SNPRelate.eigenvec.tsv"))
+ev <- read.table(evf, header=grepl("\\.tsv$",evf), stringsAsFactors=FALSE)
+if(!grepl("\\.tsv$",evf)) names(ev)[1:3] <- c("FID","IID","PC1")
+if(!grepl("\\.tsv$",evf)) { colnames(ev) <- c("FID","IID",paste0("PC",1:(ncol(ev)-2))); ev$Sample<-ev$IID } else { names(ev)[1]<-"Sample" }
+pc1 <- which(names(ev)=="PC1"); pc2 <- which(names(ev)=="PC2")
+p <- ggplot(ev, aes(ev[[pc1]], ev[[pc2]], label=Sample))+
+  geom_point(size=2.8,alpha=.95)+ggrepel::geom_text_repel(size=3.4,max.overlaps=Inf,box.padding=.35,point.padding=.25,segment.size=.3)+
+  labs(title=paste0(sp," PCA (labeled)"), x="PC1", y="PC2")+theme_classic(base_size=14)
+ggsave(file.path("pca", paste0(sp,"_PCA_PC1_PC2_Labeled.png")), p, width=10, height=8, dpi=300)
 RS

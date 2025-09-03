@@ -1,29 +1,6 @@
-# large data & outputs — keep these OUT of git
-*.fastq.gz
-*.fq.gz
-*.bam
-*.bai
-*.sam
-*.cram
-*.crai
-*.vcf
-*.vcf.gz
-*.vcf.gz.tbi
-*.g.vcf
-*.g.vcf.gz
-*.g.vcf.gz.tbi
-*.fa
-*.fa.*
-*.dict
-*.fai
-fastqc_pre/
-fastqc_post/
-trim/
-align/
-gvcf/
-vcf/
-logs/
-tmp/
-multiqc*
-.DS_Store
-*.swp
+# large and derived
+*.bam *.bai *.cram *.crai
+*.vcf *.vcf.gz *.tbi
+*.gds
+results/ pca/ logs/ raw_data/ tmp/
+__pycache__/ .DS_Store
